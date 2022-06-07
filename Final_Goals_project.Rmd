@@ -1,0 +1,741 @@
+---
+title: "What's in a Goal Anyway? An Analysis on Higher Education Student Goals."
+author: "Jeanne McClure"
+date: "12/8/2021"
+output: 
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# 0. INTRODUCTION
+
+![Figure 1.1 Soar Wing Collaborative Yearly Goal Mural](images/soarpict1.jpg){width="40%"}
+
+# 1 Prepare
+
+### Background
+
+While at my Graduate position in the Media and Education Technology Resource Center (METRC) we wanted to have an event that would get students into METRC. The idea was that students would come into METRC to hand write a yearly goal on a paper feather during October through November. The goals would then be combined into a collaborative wing mural that would be installed before Education Week so that students could come and take photos.
+
+### Research Questions
+
+1.  What are the Student goals about?
+2.  How are student's feeling about their Goals?
+3.  How do we quantify what the Student Goals are about?
+
+### Methods
+Common Word Counts
+Text Mining
+IF - ITF
+Sentiment Analysis
+Topic Modeling
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tidytext)
+library(SnowballC)
+library(topicmodels)
+library(stm)
+library(ldatuning)
+library(knitr)
+library(tidyr)
+library(topicmodels)
+library(wordcloud2)
+library(vader)
+
+```
+
+# 2. Wrangle
+
+Here we will 'wrangle' the data by **a. Reading the Data**, **b. Data Reduction** and **c. Tidying the Data** (Krumm et al., 2018).
+
+It shows that we have 213 observations and 3 variables.
+
+### a. READ Data
+
+Let's read our data into our Environment and assign it to a variable name soar_data1.
+
+```{r}
+soar_data1 <- read_csv("file/Soar-resposes.csv")
+
+soar_data1
+```
+
+### b. Data Reduction
+
+The initial Soar Data shows that we have 213 observations and 3 variables. However, we need to clean it up selecting only the students and adding a unique identifier.
+
+```{r}
+#Clean Data to omit staff, include unique identifier
+soar_data2 <- soar_data1 %>% 
+  select(c('Department', 'Goal')) %>% # only select Department and the goal data
+  filter(Department == "Distance Graduate TELS" | Department == "Graduate TELS"
+         | Department == "ELPHD" | Department == "Distance ELPHD" | 
+           Department == "Graduate STEM" | Department == "Undergraduate TELS" | 
+           Department == "Undergraduate STEM") %>%  #filter out departments to omit staff
+  group_by(Department) %>%
+  na.omit()
+  
+
+soar_data2 <- soar_data2[-51, ] # delete row 51 that contains "N/A" for goal
+
+soar_data2 <- tibble::rowid_to_column(soar_data2, "index") #add unique identifier
+
+soar_data2
+```
+
+I quickly visualize the data looking at all occurrences and the percentage of participation for each department with the VTREE package.
+
+We see that students from the Undergraduate department with the highest participation rate is Undergraduate TELS at 47% participation rate. The highest participation rate in the Graduate department is also from TELS at 14% of participants. The smallest participation rates are in Graduate STEM and all DE departments. We can quickly conclude that Undergraduate students in general frequent METRC the most out of the College of Education from the event data.
+
+```{r}
+library(vtree)
+vtree(soar_data2, "Department", horiz=FALSE, palette = 4, sortfill = TRUE)
+
+```
+
+### c. TidyText
+
+Using [Wickham 2014](https://vita.had.co.nz/papers/tidy-data.pdf), Tidy principleswe tokenize our data making each variable a column, each observation a row and each type of observational unit is a table with:
+
+a.  unnest_tokens() that splits a column into tokens
+
+b.  anti_join() returns all rows from x without a match in y and remove stop word.
+
+### tokenize our data
+
+```{r}
+soardata2_df <- soar_data2 %>% #create new tokenize data frame
+  unnest_tokens(output = word, input = Goal) %>%
+  anti_join(stop_words, by = "word") # remove all stop words
+
+
+soardata2_df # view new df
+
+```
+
+I noticed I wrangled out my unique identifier. So, I created a new column to count up later on with the variable name 'number.'
+
+```{r}
+soardata2_df <- soardata2_df %>%
+  mutate(number = row_number()) # add a new column named number to be used as the unique identifier
+
+soardata2_df
+
+```
+
+# 3. Explore
+
+Let's explore our data looking for common words together, and then filter out sentiments.
+
+
+## Count Tokenized Words
+
+Let's count the tokenize words. It looks as though **Students**, **Learn**, and **Goal** are at the top three common words in the Soar Data and we have a lot of words that only appeared once or twice. What was interesting as most are unique words. I may not stem the words then.
+
+### Word Cloud of Common Words in ALL Departments
+
+Noticing that "student" and "learn" are at the top of the list. "Goal" was part of the prompt so that word being in the top three is not a surprise.
+
+```{r}
+soardata1_df_counts <- soardata2_df %>% # create new variable for counts
+  ungroup ()%>%  #ungroup the tokenize data to create a wordcloud
+  count(word, sort = TRUE)
+
+wordcloud2(soardata1_df_counts)
+
+```
+
+### Common Words by Department
+
+It is hard to visualize the data in a table form.
+
+```{r}
+soardata1_df_counts <- soardata2_df %>% # create new variable for counts
+  count(word, sort = TRUE)
+
+soardata1_df_counts 
+
+```
+
+Maybe a bar graph would be a better visualization viewing each departments most common words.
+
+```{r}
+soarviz_1 <- soardata2_df %>%
+  count(word, sort = TRUE) %>%
+  filter(n > 10) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = Department)) +
+  geom_col(show.legend = FALSE) 
+
+
+soarviz_1
+
+```
+
+```{r}
+words_by_Department <- soardata1_df_counts %>%
+  count(Department, word, sort = TRUE) %>%
+  ungroup()
+
+words_by_Department
+
+```
+```{r}
+total_words <- words_by_Department %>% 
+  group_by(Department) %>% 
+  summarize(total = sum(n))
+
+words_by_Department <- left_join(words_by_Department, total_words)
+
+words_by_Department
+
+```
+
+
+Let's explore the Zipfs law 
+
+From [Text Mining with R](https://www.tidytextmining.com/tfidf.html)
+- Zipf’s law states that the frequency that a word appears is inversely proportional to its rank.
+
+```{r}
+freq_by_rank <- words_by_Department %>% 
+  group_by(Department) %>% 
+  mutate(rank = row_number(), 
+         `term frequency` = n/total) %>%
+  ungroup()
+
+```
+
+
+
+```{r}
+tf_idf <- words_by_Department %>%
+  bind_tf_idf(word, Department, n) 
+
+
+tf_idf
+```
+Let's look at high frequency words in each department
+```{r}
+tf_idf %>%
+  select(-total) %>%
+  arrange(desc(tf_idf))
+
+```
+
+
+# Model 
+
+Here we will model our word occurances, Bigrams, Trigrams, Sentiment and then a Topic Model. 
+
+
+We are looking to visusalize the 10 frequency words from our term frequency data. The visualization did not work because the data is so small there are many words in the top 5 count so they are overlapping. 
+
+```{r}
+
+library(forcats)
+
+
+
+tf_idf %>%
+  group_by(Department) %>%
+  slice_max(tf_idf, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(word, tf_idf), fill = Department)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Department, ncol = 3, scales = "free") +
+  labs(x = "tf-idf", y = NULL)
+```
+
+I did not have more luck with a histogram..
+
+```{r}
+
+ggplot(words_by_Department, aes(n/total, fill = Department)) +
+  geom_histogram(show.legend = FALSE) +
+  facet_wrap(~Department, ncol = 3, scales = "free_y")
+```
+
+### Bigram
+
+By tokenizing n-grams we can check out the bigrams to see if they are of any help with noticing themes.
+
+```{r}
+soardata2_bigrams <- soar_data2 %>%
+  unnest_tokens(output = word, input = Goal, token = "ngrams", n = 2) %>%
+  anti_join(stop_words, by = "word")
+
+soardata2_bigrams_counts <- soardata2_bigrams %>%
+  count(word, sort = TRUE)
+
+soardata2_bigrams_counts
+```
+
+My original bigram code did not provide good results I will use the tidyr's separate(), which splits a column into multiple based on a delimiter. This process shows much better results. Working in the CED I know that a growth mindset was being taught to Early Elmentary students, additionally students started field placements in the Fall and Spring. Many of the goals included ideal bigrams of what we would imagine to see in the College of Ed.
+
+```{r}
+
+soardata2_bigrams2 <- soar_data2 %>%
+  unnest_tokens(bigram, Goal, token = "ngrams", n = 2) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word) %>%
+  unite(bigram, word1, word2, sep = " ") %>% 
+  count(bigram, sort = TRUE)
+
+soardata2_bigrams2
+
+```
+
+### Trigram
+
+Running a trigram did not produce a result that pulls out any new themes.
+
+```{r}
+soardata2_trigrams <- soar_data2 %>%
+  unnest_tokens(trigram, Goal, token = "ngrams", n = 3) %>%
+  separate(trigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>%
+  unite(trigram, word1, word2, word3, sep = " ") %>% 
+  count(trigram, sort = TRUE)
+
+soardata2_trigrams
+
+```
+
+### SENTIMENT ANALYSIS
+
+Using the {tidytext} package we can analyze sentiments with **lexicons,** [sometimes referred to as dictionaries](https://cbail.github.io/textasdata/dictionary-methods/rmarkdown/Dictionary-Based_Text_Analysis.html).
+
+-   **AFINN** from Finn Årup Nielsen - assigns words with a score that runs between -5 and 5, with negative scores indicating negative sentiment and positive scores indicating positive sentiment.
+
+-   **bing** from Bing Liu and collaborators - categorizes words in a binary fashion into positive and negative categories, and
+
+-   **nrc** from Saif Mohammad and Peter Turney. -categorizes words in a binary fashion ("yes"/"no") into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust.
+
+It will be intersting to see if what emotions the students have in their written goals. Additionally comparing a lexicon for positive and negative sentiment.
+
+#### Load Sentiment Lexicons
+
+```{r}
+
+get_sentiments("afinn")
+
+```
+
+```{r}
+
+get_sentiments("bing")
+
+```
+
+```{r}
+
+get_sentiments("nrc")
+
+```
+
+Using the *"Bing Lexicon"* the total "Soar Data" shows 8 negative polarity words and 102 positive polarity words. This means that there are 94 more positive than negative words in this text.
+
+```{r}
+bing_tokens <- soardata2_df %>%
+  inner_join(get_sentiments("bing")) %>% # pull out only sentiment words
+  count(sentiment) %>% # count the # of positive & negative words
+  spread(sentiment, n, fill = 0) %>% # made data wide rather than narrow
+  mutate(sentiment = positive - negative) # # of positive words - # of negative owrds
+
+bing_tokens
+```
+
+```{r}
+bing_word_counts <- soardata2_df %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts
+```
+
+We can look at how much each word contributed to each sentiment
+
+```{r}
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+
+```
+
+Using the *"NRC Lexicon"* the total "Soar Data" shows 8 negative polarity words and 223 positive polarity words. This means that there are 215 more positive than negative words in this text. The most common sentiment was with "anticipation at 89 words and "joy" at 77 words.
+
+```{r}
+nrc_tokens <- soardata2_df %>%
+  inner_join(get_sentiments("nrc")) %>% # pull out only sentiment words
+  count(sentiment) %>% # count the # of positive & negative words
+  spread(sentiment, n, fill = 0) %>% # made data wide rather than narrow
+  mutate(sentiment = positive - negative) # # of positive words - # of negative owrds
+
+nrc_tokens
+
+```
+
+Let's quickly look at the most common joy words in the soar data that are associated with joy in the nrc.
+
+```{r}
+nrc_joy <- get_sentiments("nrc") %>% 
+  filter(sentiment == "joy")
+
+joysoar_nrc <- soardata2_df %>%
+  inner_join(nrc_joy) %>%
+  count(word, sort = TRUE)
+
+joysoar_nrc
+
+
+```
+
+Looking also at the negative sentiments. This looks strange and
+
+```{r}
+nrc_negative <- get_sentiments("nrc") %>% 
+  filter(sentiment == "negative")
+
+negativesoar_nrc <- soardata2_df %>%
+  inner_join(nrc_negative) %>%
+  count(word, sort = TRUE)
+
+negativesoar_nrc
+
+
+```
+
+Let's use use the **filter()**, **select()** and **grepl()** function to select just our goals column and filter out responses that contain some of the negative words shown.
+
+Here we can see that feeling in near fulfilled maybe not so negative
+
+```{r}
+soar_negative_quotes <- soar_data2 %>%
+  select(Goal) %>% 
+  filter(grepl('feeling', Goal))
+
+soar_negative_quotes
+
+
+```
+
+I am not sure that this is necessarily a negative sentiment either since the goals was not to do something.
+
+```{r}
+soar_negative_quotes <- soar_data2 %>%
+  select(Goal) %>% 
+  filter(grepl('cry', Goal))
+
+soar_negative_quotes
+
+
+```
+
+Let's look at one more negative nrc sentiment and use the \* operator to look for word stems.
+
+```{r}
+soar_negative_quotes <- soar_data2 %>%
+  select(Goal) %>% 
+  filter(grepl('overwhelm*', Goal)) #look for word stems
+
+soar_negative_quotes
+
+
+```
+
+We can see that overall most of the sentiments in the goals data are positive for most Departments. After looking at the phrases that correlated with the negative words I am not sure with hand coding those would be considered negative. The **ncr sentiment** showed a larger number of words vs **Bing**.
+
+```{r}
+soar_nrc_sentiment <- soardata2_df%>%
+  inner_join(get_sentiments("nrc")) %>%
+  count(Department, index = number %/% 5, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+  
+soar_nrc_sentiment
+```
+
+Let's plot negative vs positive sentiment by department with NRC
+
+```{r}
+library(ggplot2)
+
+ggplot(soar_nrc_sentiment, aes(index, sentiment, fill = Department)) + #use index as the X and sentiment as y by department
+  geom_col(show.legend = FALSE) + # don;t show the legend
+  facet_wrap(~Department, ncol = 2, scales = "free_x")  # put in 2 columns
+
+```
+
+Let us see what the Bing visualization looks like.
+
+```{r}
+soar_bing_sentiment <- soardata2_df%>%
+  inner_join(get_sentiments("bing")) %>%
+  count(Department, index = number %/% 5, sentiment) %>%
+  pivot_wider(names_from = sentiment, values_from = n, values_fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+  
+soar_bing_sentiment
+```
+
+```{r, echo=FALSE}
+library(ggplot2)
+
+ggplot(soar_bing_sentiment, aes(index, sentiment, fill = Department)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~Department, ncol = 2, scales = "free_x")
+
+```
+
+
+### Topic Modeling
+
+Let's explore the data by doing a parameterized model like Latent Diricj=hlet Allocation (LDA) will pull out any terms from the Goals that METRC can focus on to help support the students of the College of Education.
+
+Topic Models can help to determine the proportionate composition of a fixed number of topics within a collection of data. Our data here is ver small in comparison to say doing exploring topics within a Literature Review.
+
+### Document Matrix
+
+First we need to create a document term matrix with soardata2_df. We will remove stop words since they are uninformative.
+
+```{r}
+soar_dtm <- soardata2_df %>%
+  count(number, word, sort = TRUE) %>%
+  ungroup()
+
+cast_dtm <- soar_dtm %>%
+  cast_dtm(number, word, n)
+
+
+```
+
+Lets look at the number of terms in the matrix
+
+```{r}
+dim(cast_dtm) # look at # of terms in matrix
+
+```
+
+Next we convert to lowercase, remove special characters and stem our corpus.
+
+```{r}
+#text processing
+temp <- textProcessor(soar_data2$Goal, # use file and variable that has text
+                      metadata = soar_data2,
+                      lowercase=TRUE, # change to lowercase
+                      removestopwords=TRUE, # remove stop words
+                      removenumbers=TRUE, # remove numbers
+                      removepunctuation=TRUE, # remove special punctuation
+                      wordLengths=c(3,Inf), #Change word lengths to 3
+                      stem=FALSE, # stem the corpus
+                      onlycharacter= FALSE,
+                      striphtml=TRUE,
+                      customstopwords=FALSE) # do not choose custom stop words
+
+temp
+```
+
+Stem did not work so we must do a different code to 'Stem' the corpus.
+
+```{r}
+#stemming the text
+stemmed_soar_data <- soar_data2 %>%
+  unnest_tokens(output = word, input = Goal) %>%
+  anti_join(stop_words, by = "word") %>%
+  mutate(stem = wordStem(word)) # create a new variable named stem for the stopwords.
+
+
+stemmed_soar_data
+```
+
+Take the Stem words document and add to cast_dtm to create one corpus.
+
+```{r}
+stemmed_soar_data <- soar_data2 %>%
+  unnest_tokens(output = word, input = Goal) %>%
+  anti_join(stop_words, by = "word") %>%
+  mutate(stem = wordStem(word)) %>%
+  count(word, stem, sort = TRUE) %>%
+  cast_dtm(word, stem, n)
+
+stemmed_soar_data
+```
+
+#Latent Dirichlet allocation
+
+Using the topicmodels package we will run our LDA. Setting K to 10. 
+
+```{r}
+#running lda to find 8 topics
+lda_soar_data <- LDA(cast_dtm, k = 10, control = list(seed = 0713))
+
+lda_soar_data
+```
+Looking at the Beta occurance for each term
+```{r}
+
+soar_topics <- tidy(lda_soar_data, matrix = "beta")
+soar_topics
+```
+
+Let's see how many times the term might occur in each topic. We use augment() it uses a model to add information to each observation in the original data.
+
+```{r}
+
+soar_assignments <- augment(lda_soar_data, data = cast_dtm)
+soar_assignments
+```
+
+Look for the most common differences within each of the model topics.
+
+```{r}
+
+beta_wide <- soar_topics %>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>% 
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+beta_wide
+```
+We can run the posterior distribution on teh LDA Results. This will show the compromise between the prior distribution and the likelihood function.
+```{r}
+ldaResult <- posterior(lda_soar_data)
+
+attributes(ldaResult)
+```
+next we look at the length of the vocabulary.
+```{r}
+ncol(cast_dtm)
+
+```
+We find the k distributions over ncol(cast dtm) terms. We had 10 for K and 381 for our DTM. 
+```{r}
+beta <- ldaResult$terms
+
+dim(beta) # k distributions over ncol(sdtm) terms
+```
+We look at the matrix on beta sum to 1
+```{r}
+rowSums(beta) # rows in beta sum to 1
+```
+
+```{r}
+nrow(cast_dtm) #size of collection
+```
+Next we look at the same within theta.
+```{r}
+theta <- ldaResult$topics
+
+dim(theta) #ndocs (soardtm) distribution over K topics
+```
+
+Let's take a look at the 10 most common terms withing the term probability of inferred topics.
+
+```{r}
+terms(lda_soar_data, 10)
+
+```
+
+### Topic Ranking
+
+We can try to get more meaningful order by looking at to terms in each topic.
+
+```{r}
+
+topicNames <- apply(terms(lda_soar_data, 5), 2, paste, collapse = "") # reset topic names
+topicNames
+```
+
+Let's get a rank for the top terms per topic. This didn;t produce more then we already had above.
+
+```{r}
+topicNames <- apply(lda::top.topic.words(beta, 5, by.score = T), 2, paste, collapse = "")
+
+topicNames
+```
+
+I am wondering if e can look at the probable topics  and find their occurance. Sort topics according to the probability in the goals data
+
+```{r}
+topicProportions <- colSums(theta)/ nrow(cast_dtm)
+
+topicProportions
+```
+
+We can see that some topics are occuring more often then others in the corpus.
+
+```{r}
+names(topicProportions) <- topicNames
+
+sort(topicProportions, decreasing = TRUE)
+
+```
+
+
+
+Let's slice out the top 5 topics
+
+```{r}
+soar_top_terms <- soar_topics %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 5) %>% 
+  ungroup() %>%
+  arrange(topic, -beta)
+
+soar_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+
+
+# Communication
+
+I was hoping that we would have been able to tell from the LDA model Analysis what department the terms were from and if there are any themes in which METRC would be able to support the students better. A LDA model did not conclude anything more then a text Mining Analysis with Sentiment.
+
+The Bigrams was by far the most successfull when looking at themes that may be of interst to METRC with supportive workshops and or PGU's in the future.
+
+
+![Figure 1.2 Bigram Analysis](images/bigram.png){width="40%"}
+
+We can see that at the top of the list field placement was a goal. Learning more about and having a "Growth Mindset", learning more about "Time Management" including the "Design Process." 
+
+Since the data set was so small and many of the common terms were similar it was difficult to quantify the terms. 
+
+Understanding students needs to be successful is very important, having a better understanding ourselves, we can support our students in meaningful ways.
+
+
+**References:**
+
+-   Chang, W. (2018). R graphics cookbook: practical recipes for visualizing data. O'Reilly Media.
+
+- Niekler, A. & Gregor, W. (2020). W. Tutorial 6: Topic Models
+
+- Kellogg, S. (2021). Unit 3 Walkthrough: Topic Modeling in MOOC-Eds
+
+- Silge, J., & Robinson, D. (2017). Text mining with R: A tidy approach. " O'Reilly Media, Inc.".
+
